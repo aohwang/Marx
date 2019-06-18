@@ -1,6 +1,8 @@
 #!/usr/bin/env python2.7
 
+from __future__ import print_function
 import sys
+import subprocess
 
 from idc import *
 from idaapi import *
@@ -8,69 +10,52 @@ from idautils import *
 
 from struct import pack
 from ctypes import c_uint32, c_uint64
-import subprocess
+from elftools.elf.elffile import ELFFile
+from elftools.elf.relocation import RelocationSection
+from ida_kernwin import Form, Choose, ask_str
+
+class MarxForm(Form):
+    def __init__(self):
+        self.pure_virtual_call = 0
+        self.file = ''
+        self.output_dir = ''
+        Form.__init__(self,
+            r"""STARTITEM {id:iFileOpen}
+            Marx: Uncovering Class Hierarchies in C++ Programs
+            {FormChangeCb}
+            <##  Enter the address of pure_virtual_call  :{iAddr}>
+            <##Select the file corresponding with the IDB:{iFileOpen}>
+            <##    Select the dir to save the outputs    :{iDir}>
+            """,
+            {
+                    'iFileOpen': Form.FileInput(open=True, swidth=20),
+                    'iAddr': Form.NumericInput(tp=Form.FT_ADDR, swidth=20),
+                    'iDir': Form.DirInput(swidth=20),
+                    'FormChangeCb': Form.FormChangeCb(self.OnFormChange),
+            }
+        )
+
+    def OnFormChange(self, fid):
+        if fid == -2:
+            self.file = self.GetControlValue(self.FindControlById(self.iFileOpen.id))
+            self.pure_virtual_call = self.GetControlValue(self.FindControlById(self.iAddr.id))
+            self.output_dir = self.GetControlValue(self.FindControlById(self.iDir.id))
+            print("Pure_virtual_call %x \nInputfile %s\nOutput directory %s" %(self.pure_virtual_call, self.file, self.output_dir))
+        return 1
 
 base = get_imagebase()
 plt_start, plt_end = 0, 0
 segments = list(Segments())
+relocation_entries = set()
 
 # C++ configuration
 dump_vtables = True
-vtable_section_names = [".rodata",
-    ".data.rel.ro",
-    ".data.rel.ro.local",
-    ".rdata"]
-#pure_virtual_addr = 0x4006D0 # toy example
-#pure_virtual_addr = 0x20106C # libtoy.so (toy example)
-#pure_virtual_addr = None # main (toy example)
-#pure_virtual_addr = None # libwx_baseu_xml-3.0.so.0
-#pure_virtual_addr = 0x2F1A38 # libwx_gtk2u_html-3.0.so.0
-#pure_virtual_addr = 0x3BBC6C # libwx_gtk2u_xrc-3.0.so.0
-#pure_virtual_addr = 0x8DA460 # libwx_gtk2u_core-3.0.so.0
-#pure_virtual_addr = 0x2A1208 # libwx_gtk2u_aui-3.0.so.0
-#pure_virtual_addr = 0x41C91C # libwx_gtk2u_adv-3.0.so.0
-#pure_virtual_addr = 0x24D7C0 # libwx_baseu_net-3.0.so.0
-#pure_virtual_addr = 0x4AD3D8 # libwx_baseu-3.0.so.0
-#pure_virtual_addr = 0x430B10 # filezilla x64
-#pure_virtual_addr = 0x4B1CE70 # libxul x64
-#pure_virtual_addr = 0x743BB0 # mysqld x64
-#pure_virtual_addr = 0x6CF150 # node x64
-#pure_virtual_addr = 0x219AB4 # libflac x64
-#pure_virtual_addr = 0x28ED58 # libmusicbrainz x64
-#pure_virtual_addr = 0x916B80 # mongod x64
-#pure_virtual_addr = 0x224C74 # libebml x64
-#pure_virtual_addr = 0x2AC924 # libmatroska x64
-#pure_virtual_addr = 0x492F68 # libwx_baseu-3.1.so.0.0.0
-#pure_virtual_addr = 0x24BB30 # libwx_baseu_net-3.1.so.0.0.0
-#pure_virtual_addr = None # libwx_baseu_xml-3.1.so.0.0.0
-#pure_virtual_addr = 0x3F62C0 # libwx_gtk2u_adv-3.1.so.0.0.0
-#pure_virtual_addr = 0x2981FC # libwx_gtk2u_aui-3.1.so.0.0.0
-#pure_virtual_addr = 0x7F8894 # libwx_gtk2u_core-3.1.so.0.0.0
-#pure_virtual_addr = 0x2CCE04 # libwx_gtk2u_html-3.1.so.0.0.0
-#pure_virtual_addr = 0x313090 # libwx_gtk2u_xrc-3.1.so.0.0.0
-#pure_virtual_addr = 0x430DB0 # filezilla
-#pure_virtual_addr = 0x5E3C0 # libstdc++
-#pure_virtual_addr = 0x4D6F2F0 # libxul.so + debug
-#pure_virtual_addr = 0x220404 # libflac + VTV
-#pure_virtual_addr = 0x6BC8B0 # node + VTV
-#pure_virtual_addr = 0x8EB4C0 # mongod + VTV
-#pure_virtual_addr = 0x4363D0 # filezilla + VTV
-#pure_virtual_addr = 0x4057D0 # vboxmanage + debug
-#pure_virtual_addr = 0x44C824 # vboxrt.so + debug
-#pure_virtual_addr = 0x311A38 # VBoxXPCOM.so + debug
-#pure_virtual_addr = None # spec + astar
-#pure_virtual_addr = 0x4027B0 # spec + omnetpp
-#pure_virtual_addr = 0x402F40 # spec + xalancbmk
-#pure_virtual_addr = 0x402340 # spec + povray
-#pure_virtual_addr = 0x403E50 # spec + dealII
-#pure_virtual_addr = None # spec + namd
-#pure_virtual_addr = 0x401DC0 # spec + soplex
-#pure_virtual_addr = 0x14CE # windows toy 1 DEBUG
-#pure_virtual_addr = 0x19DC  # windows toy 1 RELEASE
-#pure_virtual_addr = 0xB2D3D8  # windows mysqld
-#pure_virtual_addr = 0xBFD160  # windows mongodb
-pure_virtual_addr = 0x606C4C  # windows node
+vtable_section_names = [".rodata", ".data.rel.ro", ".data.rel.ro.local", ".rdata"]
 
+pure_virtual_addr = 0
+binary_corresponding_idb = ''
+output_dir = ''
+output_prefix = ''
 
 # gives the number of allowed zero entries in the beginning of
 # a vtable candidate
@@ -82,26 +67,18 @@ is_windows = None
 # extracts all relocation entries from the ELF file
 # (needed for vtable location heuristics)
 def get_relocation_entries_gcc64(elf_file):
-
     relocation_entries = set()
-
-    try:
-        result = subprocess.check_output(
-            ['readelf', '--relocs', elf_file])
-    except:
-        raise Exception("Not able to extract relocation entries.")
-
-    for line in result.split('\n')[3:]:
-        line = line.split()
-
-        try:
-            rel_offset = int(line[0], 16)
-            relocation_entries.add(rel_offset)
-        except:
-            continue
-
+    with open(elf_file, 'rb') as f:
+        elffile = ELFFile(f)
+        reladyn_name = '.rela.dyn'
+        reladyn = elffile.get_section_by_name(reladyn_name)
+        for reloc in reladyn.iter_relocations():
+            relocation_entries.add(reloc['r_offset'])
+        reladyn_name = '.rela.plt'
+        reladyn = elffile.get_section_by_name(reladyn_name)
+        for reloc in reladyn.iter_relocations():
+            relocation_entries.add(reloc['r_offset'])
     return relocation_entries
-
 
 def memory_accessible(addr):
     for segment in segments:
@@ -109,10 +86,8 @@ def memory_accessible(addr):
             return True
     return False
 
-
 # check the given vtable entry is valid
 def check_entry_valid_gcc64(addr, qword):
-
     # is qword a pointer into the text section?
     ptr_to_text = (text_start <= qword < text_end)
 
@@ -138,10 +113,8 @@ def check_entry_valid_gcc64(addr, qword):
         return True
     return False
 
-
 # returns a dict with key = vtable address and value = set of vtable entries
 def get_vtable_entries_gcc64(vtables_offset_to_top):
-
     vtable_entries = dict()
 
     # get all vtable entries for each identified vtable
@@ -165,10 +138,8 @@ def get_vtable_entries_gcc64(vtables_offset_to_top):
 
     return vtable_entries
 
-
 # returns a dict with key = vtable address and value = offset to top
 def get_vtables_gcc64():
-
     vtables_offset_to_top = dict()
 
     # is it preceded by a valid offset to top and rtti entry?
@@ -282,10 +253,8 @@ def get_vtables_gcc64():
 
     return vtables_offset_to_top
 
-
 # check the given vtable entry is valid
 def check_entry_valid_msvc64(addr, qword):
-
     # is qword a pointer into the text section?
     ptr_to_text = (text_start <= qword < text_end)
 
@@ -294,10 +263,8 @@ def check_entry_valid_msvc64(addr, qword):
         return True
     return False
 
-
 # TODO: function only works if RTTI is enabled in windows binary.
 def get_vtables_msvc64():
-
     vtables_offset_to_top = dict()
 
     # is it preceded by a valid rtti entry?
@@ -375,10 +342,8 @@ def get_vtables_msvc64():
 
     return vtables_offset_to_top
 
-
 # returns a dict with key = vtable address and value = set of vtable entries
 def get_vtable_entries_msvc64(vtables_offset_to_top):
-
     vtable_entries = dict()
 
     # get all vtable entries for each identified vtable
@@ -399,7 +364,6 @@ def get_vtable_entries_msvc64(vtables_offset_to_top):
             curr_qword = Qword(curr_addr)
 
     return vtable_entries
-
 
 def process_function(function):
     dump = pack('<I', function - base)
@@ -428,189 +392,6 @@ def process_function(function):
     dump += pack('<H', block_count)
     dump += block_dump
     return dump
-
-
-def main():
-
-    # Windows does only work if the image base is set to 0x0.
-    if is_windows and get_imagebase() != 0x0:
-        print "Image base has to be 0x0."
-        return
-
-    global plt_start, plt_end, segments
-    dump = pack('<Q', base)
-    assert len(dump) == 8
-
-    for segment in segments:
-        if SegName(segment) == '.plt':
-            plt_start = SegStart(segment)
-            plt_end = SegEnd(segment)
-            break
-
-    functions_dump = ''
-    function_count = 0
-
-    funcs = set()
-    for segment in segments:
-        permissions = getseg(segment).perm
-        if not permissions & SEGPERM_EXEC:
-            continue
-
-        if SegStart(segment) == plt_start:
-            continue
-
-        print('\nProcessing segment %s.' % SegName(segment))
-        for i, function in enumerate(Functions(SegStart(segment),
-            SegEnd(segment))):
-
-            funcs.add(function)
-
-            functions_dump += process_function(function)
-            function_count += 1
-
-            if i & (0x100 - 1) == 0 and i > 0:
-                print('Function %d.' % i)
-
-    packed_function_count = pack('<I', function_count)
-    assert len(packed_function_count) == 4
-
-    dump += packed_function_count
-    dump += functions_dump
-
-    with open(GetInputFile() + '.dmp', 'wb') as f:
-        f.write(dump)
-
-    print('\nExported %d functions.' % function_count)
-
-    # Export function names.
-    counter = 0
-    with open(GetInputFile() + '_funcs.txt', 'w') as f:
-
-        # Write Module name to file.
-        # NOTE: We consider the file name == module name.
-        f.write("%s\n" % GetInputFile())
-
-        for func in funcs:
-            # Ignore functions that do not have a name.
-            func_name = GetFunctionName(func)
-            if not func_name:
-                continue
-
-            f.write("%x %s\n" % (func, func_name))
-            counter += 1
-
-    print('\nExported %d function names.' % counter)
-
-    # Export function blacklist.
-    counter = 0
-    with open(GetInputFile() + '_funcs_blacklist.txt', 'w') as f:
-
-        # Write Module name to file.
-        # NOTE: We consider the file name == module name.
-        f.write("%s\n" % GetInputFile())
-
-        # Blacklist pure virtual function.
-        if pure_virtual_addr:
-            f.write("%x\n" % pure_virtual_addr)
-
-        # TODO
-        # Write logic that creates addresses of blacklisted functions.
-        # (needed for Windows binaries)
-
-    print('\nExported %d function blacklist.' % counter)
-
-    # Export vtables.
-    if dump_vtables:
-
-        if is_linux:
-            vtables_offset_to_top = get_vtables_gcc64()
-            vtable_entries = get_vtable_entries_gcc64(vtables_offset_to_top)
-
-        elif is_windows:
-            vtables_offset_to_top = get_vtables_msvc64()
-            vtable_entries = get_vtable_entries_msvc64(vtables_offset_to_top)
-
-        else:
-            raise Exception("Do not know underlying architecture.")
-
-        with open(GetInputFile() + '_vtables.txt', 'w') as f:
-
-            # Write Module name to file.
-            # NOTE: We consider the file name == module name.
-            f.write("%s\n" % GetInputFile())
-
-            for k in vtables_offset_to_top:
-                f.write("%x %d" % (k, vtables_offset_to_top[k]))
-
-                # write vtable entries in the correct order
-                for vtbl_entry in vtable_entries[k]:
-                    f.write(" %x" % vtbl_entry)
-
-                f.write("\n")
-
-        print('\nExported %d vtables.' % len(vtables_offset_to_top))
-
-    # Export .plt entries.
-    if dump_vtables and is_linux:
-        counter = 0
-        with open(GetInputFile() + '_plt.txt', 'w') as f:
-
-            # Write Module name to file.
-            # NOTE: We consider the file name == module name.
-            f.write("%s\n" % GetInputFile())
-
-            for i, function in enumerate(Functions(plt_start, plt_end)):
-
-                # Ignore functions that do not have a name.
-                func_name = GetFunctionName(function)
-                if not func_name:
-                    continue
-
-                # Names of .plt function start with an ".". Remove it.
-                f.write("%x %s\n" % (function, func_name[1:]))
-                counter += 1
-        print('\nExported %d .plt entries.' % counter)
-
-    # Export .got entries.
-    if dump_vtables and is_linux:
-        counter = 0
-        with open(GetInputFile() + '_got.txt', 'w') as f:
-
-            # Write Module name to file.
-            # NOTE: We consider the file name == module name.
-            f.write("%s\n" % GetInputFile())
-
-            curr_addr = got_start
-            while curr_addr <= got_end:
-                f.write("%x %x\n" % (curr_addr, Qword(curr_addr)))
-                curr_addr += 8
-                counter += 1
-        print('\nExported %d .got entries.' % counter)
-
-    # Export .idata entries.
-    if dump_vtables and is_windows:
-        counter = 0
-        with open(GetInputFile() + '_idata.txt', 'w') as f:
-
-            # Write Module name to file.
-            # NOTE: We consider the file name == module name.
-            f.write("%s\n" % GetInputFile())
-
-            addr = idata_start
-            while addr <= idata_end:
-
-                # Ignore imports that do not have a name.
-                import_name = Name(addr)
-                if not import_name:
-                    addr += 8
-                    continue
-
-                f.write("%x %s\n" % (addr, import_name))
-                counter += 1
-                addr += 8
-
-        print('\nExported %d .idata entries.' % counter)
-
 
 info = get_inf_structure()
 if not info.is_64bit():
@@ -667,10 +448,203 @@ if dump_vtables:
         elif SegName(segment) in vtable_section_names:
             vtable_sections.append(segment)
 
+def main():
+    f = MarxForm()
+    f.Compile()
+    f.Execute()
+    global pure_virtual_addr, binary_corresponding_idb, output_dir, output_prefix
+    pure_virtual_addr = f.pure_virtual_call
+    binary_corresponding_idb = f.file
+    output_dir = f.output_dir
+    output_prefix = binary_corresponding_idb.split(os.sep)[-1]
+    f.Free()
+
+    if pure_virtual_addr == 0 or binary_corresponding_idb == '':
+        print("pure_virtual_addr or binary_corresponding_idb is empty")
+        return
+
+    # Windows does only work if the image base is set to 0x0.
+    if is_windows and get_imagebase() != 0x0:
+        print("Image base has to be 0x0.")
+        return
+
+    global relocation_entries
     if is_linux:
-        relocation_entries = get_relocation_entries_gcc64(GetInputFilePath())
+        relocation_entries = get_relocation_entries_gcc64(binary_corresponding_idb)
+
+    global plt_start, plt_end, segments
+    dump = pack('<Q', base)
+    assert len(dump) == 8
+
+    for segment in segments:
+        if SegName(segment) == '.plt':
+            plt_start = SegStart(segment)
+            plt_end = SegEnd(segment)
+            break
+
+    functions_dump = ''
+    function_count = 0
+
+    funcs = set()
+    for segment in segments:
+        permissions = getseg(segment).perm
+        if not permissions & SEGPERM_EXEC:
+            continue
+
+        if SegStart(segment) == plt_start:
+            continue
+
+        print('\nProcessing segment %s.' % SegName(segment))
+        for i, function in enumerate(Functions(SegStart(segment),
+            SegEnd(segment))):
+
+            funcs.add(function)
+
+            functions_dump += process_function(function)
+            function_count += 1
+
+            if i & (0x100 - 1) == 0 and i > 0:
+                print('Function %d.' % i)
+
+    packed_function_count = pack('<I', function_count)
+    assert len(packed_function_count) == 4
+
+    dump += packed_function_count
+    dump += functions_dump
+
+    with open(output_dir + os.sep + output_prefix + '.dmp', 'wb') as f:
+        f.write(dump)
+
+    print('\nExported %d functions.' % function_count)
+
+    # Export function names.
+    counter = 0
+    with open(output_dir + os.sep + output_prefix + '_funcs.txt', 'w') as f:
+
+        # Write Module name to file.
+        # NOTE: We consider the file name == module name.
+        f.write("%s\n" % GetInputFile())
+
+        for func in funcs:
+            # Ignore functions that do not have a name.
+            func_name = GetFunctionName(func)
+            if not func_name:
+                continue
+
+            f.write("%x %s\n" % (func, func_name))
+            counter += 1
+
+    print('\nExported %d function names.' % counter)
+
+    # Export function blacklist.
+    counter = 0
+    with open(output_dir + os.sep + output_prefix + '_funcs_blacklist.txt', 'w') as f:
+
+        # Write Module name to file.
+        # NOTE: We consider the file name == module name.
+        f.write("%s\n" % GetInputFile())
+
+        # Blacklist pure virtual function.
+        if pure_virtual_addr:
+            f.write("%x\n" % pure_virtual_addr)
+
+        # TODO
+        # Write logic that creates addresses of blacklisted functions.
+        # (needed for Windows binaries)
+
+    print('\nExported %d function blacklist.' % counter)
+
+    # Export vtables.
+    if dump_vtables:
+
+        if is_linux:
+            vtables_offset_to_top = get_vtables_gcc64()
+            vtable_entries = get_vtable_entries_gcc64(vtables_offset_to_top)
+
+        elif is_windows:
+            vtables_offset_to_top = get_vtables_msvc64()
+            vtable_entries = get_vtable_entries_msvc64(vtables_offset_to_top)
+
+        else:
+            raise Exception("Do not know underlying architecture.")
+
+        with open(output_dir + os.sep + output_prefix + '_vtables.txt', 'w') as f:
+
+            # Write Module name to file.
+            # NOTE: We consider the file name == module name.
+            f.write("%s\n" % GetInputFile())
+
+            for k in vtables_offset_to_top:
+                f.write("%x %d" % (k, vtables_offset_to_top[k]))
+
+                # write vtable entries in the correct order
+                for vtbl_entry in vtable_entries[k]:
+                    f.write(" %x" % vtbl_entry)
+
+                f.write("\n")
+
+        print('\nExported %d vtables.' % len(vtables_offset_to_top))
+
+    # Export .plt entries.
+    if dump_vtables and is_linux:
+        counter = 0
+        with open(output_dir + os.sep + output_prefix + '_plt.txt', 'w') as f:
+
+            # Write Module name to file.
+            # NOTE: We consider the file name == module name.
+            f.write("%s\n" % GetInputFile())
+
+            for i, function in enumerate(Functions(plt_start, plt_end)):
+
+                # Ignore functions that do not have a name.
+                func_name = GetFunctionName(function)
+                if not func_name:
+                    continue
+
+                # Names of .plt function start with an ".". Remove it.
+                f.write("%x %s\n" % (function, func_name[1:]))
+                counter += 1
+        print('\nExported %d .plt entries.' % counter)
+
+    # Export .got entries.
+    if dump_vtables and is_linux:
+        counter = 0
+        with open(output_dir + os.sep + output_prefix + '_got.txt', 'w') as f:
+
+            # Write Module name to file.
+            # NOTE: We consider the file name == module name.
+            f.write("%s\n" % GetInputFile())
+
+            curr_addr = got_start
+            while curr_addr <= got_end:
+                f.write("%x %x\n" % (curr_addr, Qword(curr_addr)))
+                curr_addr += 8
+                counter += 1
+        print('\nExported %d .got entries.' % counter)
+
+    # Export .idata entries.
+    if dump_vtables and is_windows:
+        counter = 0
+        with open(output_dir + os.sep + output_prefix + '_idata.txt', 'w') as f:
+
+            # Write Module name to file.
+            # NOTE: We consider the file name == module name.
+            f.write("%s\n" % GetInputFile())
+
+            addr = idata_start
+            while addr <= idata_end:
+
+                # Ignore imports that do not have a name.
+                import_name = Name(addr)
+                if not import_name:
+                    addr += 8
+                    continue
+
+                f.write("%x %s\n" % (addr, import_name))
+                counter += 1
+                addr += 8
+
+        print('\nExported %d .idata entries.' % counter)
 
 if __name__ == '__main__':
-    if pure_virtual_addr:
-        print("pure_virtual function at 0x%x" % pure_virtual_addr)
     main()
