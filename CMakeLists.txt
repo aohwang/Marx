@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 2.8 FATAL_ERROR)
 project(marx)
 
-set(CMAKE_CXX_COMPILER "//usr/bin/clang++-3.6")
+set(CMAKE_CXX_COMPILER "clang++")
 
 add_definitions("-std=c++11")
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Werror -pedantic -Wextra")
