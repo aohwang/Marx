@@ -42,10 +42,6 @@ class MarxForm(Form):
             self.pure_virtual_call = self.GetControlValue(self.FindControlById(self.iAddr.id))
             self.output_dir = self.GetControlValue(self.FindControlById(self.iDir.id))
             print("Pure_virtual_call %x \nInputfile %s\nOutput directory %s" %(self.pure_virtual_call, self.file, self.output_dir))
-        elif fid == -5:
-            self.file = ''
-            self.pure_virtual_call = ''
-            self.output_dir = ''
         return 1
 
 base = get_imagebase()
@@ -60,7 +56,6 @@ vtable_section_names = [".rodata", ".data.rel.ro", ".data.rel.ro.local", ".rdata
 pure_virtual_addr = 0
 binary_corresponding_idb = ''
 output_dir = ''
-output_prefix = ''
 
 # gives the number of allowed zero entries in the beginning of
 # a vtable candidate
@@ -456,14 +451,13 @@ if dump_vtables:
 def main():
     f = MarxForm()
     f.Compile()
-    f.Execute()
-    global pure_virtual_addr, binary_corresponding_idb, output_dir, output_prefix
+    if f.Execute() != 1:
+        return
+    global pure_virtual_addr, binary_corresponding_idb, output_dir
     pure_virtual_addr = f.pure_virtual_call
     binary_corresponding_idb = f.file
     output_dir = f.output_dir
 
-    if binary_corresponding_idb != '':
-        output_prefix = binary_corresponding_idb.split(os.sep)[-1]
     f.Free()
 
     if pure_virtual_addr == 0 or binary_corresponding_idb == '':
@@ -518,14 +512,14 @@ def main():
     dump += packed_function_count
     dump += functions_dump
 
-    with open(output_dir + os.sep + output_prefix + '.dmp', 'wb') as f:
+    with open(output_dir + os.sep + GetInputFile() + '.dmp', 'wb') as f:
         f.write(dump)
 
     print('\nExported %d functions.' % function_count)
 
     # Export function names.
     counter = 0
-    with open(output_dir + os.sep + output_prefix + '_funcs.txt', 'w') as f:
+    with open(output_dir + os.sep + GetInputFile() + '_funcs.txt', 'w') as f:
 
         # Write Module name to file.
         # NOTE: We consider the file name == module name.
@@ -544,7 +538,7 @@ def main():
 
     # Export function blacklist.
     counter = 0
-    with open(output_dir + os.sep + output_prefix + '_funcs_blacklist.txt', 'w') as f:
+    with open(output_dir + os.sep + GetInputFile() + '_funcs_blacklist.txt', 'w') as f:
 
         # Write Module name to file.
         # NOTE: We consider the file name == module name.
@@ -574,7 +568,7 @@ def main():
         else:
             raise Exception("Do not know underlying architecture.")
 
-        with open(output_dir + os.sep + output_prefix + '_vtables.txt', 'w') as f:
+        with open(output_dir + os.sep + GetInputFile() + '_vtables.txt', 'w') as f:
 
             # Write Module name to file.
             # NOTE: We consider the file name == module name.
@@ -594,7 +588,7 @@ def main():
     # Export .plt entries.
     if dump_vtables and is_linux:
         counter = 0
-        with open(output_dir + os.sep + output_prefix + '_plt.txt', 'w') as f:
+        with open(output_dir + os.sep + GetInputFile() + '_plt.txt', 'w') as f:
 
             # Write Module name to file.
             # NOTE: We consider the file name == module name.
@@ -615,7 +609,7 @@ def main():
     # Export .got entries.
     if dump_vtables and is_linux:
         counter = 0
-        with open(output_dir + os.sep + output_prefix + '_got.txt', 'w') as f:
+        with open(output_dir + os.sep + GetInputFile() + '_got.txt', 'w') as f:
 
             # Write Module name to file.
             # NOTE: We consider the file name == module name.
@@ -631,7 +625,7 @@ def main():
     # Export .idata entries.
     if dump_vtables and is_windows:
         counter = 0
-        with open(output_dir + os.sep + output_prefix + '_idata.txt', 'w') as f:
+        with open(output_dir + os.sep + GetInputFile() + '_idata.txt', 'w') as f:
 
             # Write Module name to file.
             # NOTE: We consider the file name == module name.
