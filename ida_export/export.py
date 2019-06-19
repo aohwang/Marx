@@ -1,6 +1,7 @@
 #!/usr/bin/env python2.7
 
 from __future__ import print_function
+import os
 import sys
 import subprocess
 
@@ -41,6 +42,10 @@ class MarxForm(Form):
             self.pure_virtual_call = self.GetControlValue(self.FindControlById(self.iAddr.id))
             self.output_dir = self.GetControlValue(self.FindControlById(self.iDir.id))
             print("Pure_virtual_call %x \nInputfile %s\nOutput directory %s" %(self.pure_virtual_call, self.file, self.output_dir))
+        elif fid == -5:
+            self.file = ''
+            self.pure_virtual_call = ''
+            self.output_dir = ''
         return 1
 
 base = get_imagebase()
@@ -456,11 +461,12 @@ def main():
     pure_virtual_addr = f.pure_virtual_call
     binary_corresponding_idb = f.file
     output_dir = f.output_dir
-    output_prefix = binary_corresponding_idb.split(os.sep)[-1]
+
+    if binary_corresponding_idb != '':
+        output_prefix = binary_corresponding_idb.split(os.sep)[-1]
     f.Free()
 
     if pure_virtual_addr == 0 or binary_corresponding_idb == '':
-        print("pure_virtual_addr or binary_corresponding_idb is empty")
         return
 
     # Windows does only work if the image base is set to 0x0.
